@@ -5,7 +5,7 @@ from mail_process_worker.utils.logger import logger
 from mail_process_worker.utils.decorator import timeout
 from mail_process_worker.logic.client.kafka_client import KafkaConsumerClient, KafkaProducerClient
 from mail_process_worker.logic.client.redis_client import rdb
-from mail_process_worker.setting import WorkerConfig
+from mail_process_worker.setting import KafkaClientConfig, WorkerConfig
 
 
 class HandleEvent:
@@ -30,7 +30,6 @@ class HandleEvent:
             self.messages.clear()
 
         self.messages.append(data)
-        logger.info(f"set priority for {data['event']}")
         event_priority = {
             "MailboxCreate": 1,
             "MailboxRename": 2,
@@ -89,7 +88,9 @@ class HandleEvent:
 
     def handle_event(self, event):
         data = event.value
-        self.delay_event(data.get('user'), data.get("msgid"))
+        user = data.get("user", None)
+        if user not in KafkaClientConfig.KAFKA_EMAIL_TRANSFER:
+            return self.consumer.kafka_commit(self.consumer.consumer, data["topic"], data["partition"], data["offset"])
         if data["event"] in [
             "MessageRead",
             "MailboxSubscribe",
@@ -143,5 +144,6 @@ class HandleEvent:
                 if not msg:
                     continue
                 start = time.time()
-                for event in list(msg.values())[0]:
-                    self.handle_event(event)
+                for _, events in msg.items():
+                    for event in events:
+                        self.handle_event(event)

@@ -8,7 +8,7 @@ from mail_process_worker.setting import KafkaClientConfig, KafkaAuth
 from mail_process_worker.utils.logger import logger
 from mail_process_worker.utils.decorator import retry, timeout
 
-AGGREGATE = ["MessageExpunge", "FlagsSet", "FlagsClear", "MessageTrash"]
+AGGREGATE = ["MessageAppend", "MessageExpunge", "FlagsSet", "FlagsClear", "MessageTrash"]
 
 context = ssl.create_default_context()
 context.options &= ssl.OP_NO_TLSv1
@@ -72,6 +72,7 @@ class KafkaProducerClient:
         self.aggregated_topic = (
             KafkaClientConfig.KAFKA_PRODUCER_AGGREGATED_TOPIC
         )
+        self.topic_for_transfer = KafkaClientConfig.KAFKA_PRODUCER_TRANSFER_TOPIC
         self.value_serializer = lambda x: json.dumps(x).encode("utf-8")
         self.kafka_msgs = []
         self.sasl_plain_username = KafkaAuth.SASL_PLAIN_USERNAME
@@ -92,7 +93,10 @@ class KafkaProducerClient:
         user = message.get("user")
         username, _, domain = user.partition("@")
         msg_format = {"payload": message}
-        if uids > 1 or message.get("event") in AGGREGATE:
+        if user in KafkaClientConfig.KAFKA_EMAIL_TRANSFER:
+            topic = self.topic_for_transfer
+            msg_format.update({"key": user, "topic": topic})
+        elif uids > 1 or message.get("event") in AGGREGATE:
             if domain in KafkaClientConfig.KAFKA_IGNORE_DOMAIN:
                 return
             topic = self.aggregated_topic
@@ -119,9 +123,7 @@ class KafkaProducerClient:
             payload = msg.get("payload", {})
             kafka_topic = msg.get("topic")
             kafka_key = msg.get("key")
-            logger.info(
-                "Sending message: {} to topic: {}".format(payload, kafka_topic)
-            )
+            logger.info("Sending message: {} to topic: {}".format(payload, kafka_topic))
             uids = payload.get("uids") or []
             slice = KafkaClientConfig.KAFKA_SLICE_SIZE
             while len(uids) >= slice:
