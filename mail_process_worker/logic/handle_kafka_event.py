@@ -1,11 +1,9 @@
 import time
 import calendar
-import uuid
 
 from mail_process_worker.utils.logger import logger
 from mail_process_worker.utils.decorator import timeout
-from mail_process_worker.logic.client.mqtt_client import MQTTClient
-from mail_process_worker.logic.client.kafka_client import KafkaConsumerClient
+from mail_process_worker.logic.client.kafka_client import KafkaConsumerClient, KafkaProducerClient
 from mail_process_worker.logic.client.redis_client import rdb
 from mail_process_worker.setting import WorkerConfig
 
@@ -15,7 +13,7 @@ class HandleEvent:
         self.user_events = {}
         self.new_event = {}
         self.messages = []
-        self.mqtt = MQTTClient()
+        self.producer = KafkaProducerClient()
         self.consumer = KafkaConsumerClient()
         self.consumer.create_consumer()
 
@@ -25,14 +23,13 @@ class HandleEvent:
 
     def set_priority(self, data: dict):
         if len(self.messages) == WorkerConfig.NUMBER_OF_MESSAGE:
-            self.mqtt.ordered_message(self.user_events)
-            self.mqtt.publish_message(self.consumer.consumer)
+            self.producer.ordered_message(self.user_events)
+            self.producer.send_message(self.consumer.consumer)
             self.user_events.clear()
             self.new_event.clear()
             self.messages.clear()
 
         self.messages.append(data)
-        logger.info(f"set priority for {data['event']}")
         event_priority = {
             "MailboxCreate": 1,
             "MailboxRename": 2,
@@ -52,48 +49,45 @@ class HandleEvent:
         if not exist_user:
             self.user_events.update({user: []})
         self.user_events[user].append((event_priority[event_name], data))
-        logger.info(f"set priority for {data['event']} | DONE")
 
     @timeout(10)
-    def custom_event(self, event_name: str, data: dict):
-        if event_name == "MessageMove":
-            user = data["user"]
-            if data["event"] == "MessageAppend":
-                exist_user = self.new_event.get(user, None)
-                if not exist_user:
-                    self.new_event.update(
-                        {
-                            user: {
-                                "new_uids": [],
-                            }
+    def custom_event(self, data: dict):
+        user = data["user"]
+        if data["event"] == "MessageAppend":
+            exist_user = self.new_event.get(user, None)
+            if not exist_user:
+                self.new_event.update(
+                    {
+                        user: {
+                            "new_uids": [],
                         }
-                    )
-                self.new_event[user]["new_uids"].append(data["uids"][0])
-                self.new_event[user].update(
-                    {
-                        "event": event_name,
-                        "event_timestamp": self.get_current_timestamp(),
-                        "user": user,
-                        "new_mailbox": data["mailbox"],
                     }
                 )
-            elif data["event"] == "MessageExpunge":
-                self.new_event[user].update(
-                    {
-                        "old_uids": data["uids"],
-                        "old_mailbox": data["mailbox"],
-                        "offset": data["offset"],
-                        "topic": data["topic"],
-                        "partition": data["partition"],
-                    }
-                )
-                self.set_priority(self.new_event[user])
-            return None
+            self.new_event[user]["new_uids"].append(data["uid"])
+            self.new_event[user].update(
+                {
+                    "event": "MessageMove",
+                    "event_timestamp": self.get_current_timestamp(),
+                    "user": user,
+                    "new_mailbox": data["mailbox"],
+                }
+            )
+        elif data["event"] == "MessageExpunge":
+            self.new_event[user].update(
+                {
+                    "old_uids": [],
+                    "old_mailbox": data["mailbox"],
+                    "offset": data["offset"],
+                    "topic": data["topic"],
+                    "partition": data["partition"],
+                }
+            )
+            self.new_event[user]["old_uids"].append(data["uid"])
+            self.set_priority(self.new_event[user])
+        return None
 
     def handle_event(self, event):
         data = event.value
-        logger.info(data)
-        #self.delay_event(data.get('user'), data.get("msgid"))
         if data["event"] in [
             "MessageRead",
             "MailboxSubscribe",
@@ -103,14 +97,13 @@ class HandleEvent:
 
         data.update(
             {
-                "id": str(uuid.uuid4()),
                 "topic": event.topic,
                 "partition": event.partition,
                 "offset": event.offset,
             }
         )
 
-        logger.info(f"New event ==> {data['event']}")
+        logger.info(f"Received: {data}")
         if data["event"] == "MessageAppend" and data["user"] in data.get(
             "from", ""
         ):
@@ -137,8 +130,8 @@ class HandleEvent:
         start = time.time()
         while True:
             if time.time() - start > WorkerConfig.WINDOW_DURATION:
-                self.mqtt.ordered_message(self.user_events)
-                self.mqtt.publish_message(self.consumer.consumer)
+                self.producer.ordered_message(self.user_events)
+                self.producer.send_message(self.consumer.consumer)
                 self.user_events.clear()
                 self.new_event.clear()
                 self.messages.clear()
@@ -148,5 +141,7 @@ class HandleEvent:
                 if not msg:
                     continue
                 start = time.time()
-                for event in list(msg.values())[0]:
-                    self.handle_event(event)
+                logger.info("MESSAGE: {}".format(msg))
+                for _, events in msg.items():
+                    for event in events:
+                        self.handle_event(event)
