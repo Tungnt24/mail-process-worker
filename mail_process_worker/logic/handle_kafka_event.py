@@ -1,11 +1,9 @@
 import time
 import calendar
-import uuid
 
 from mail_process_worker.utils.logger import logger
 from mail_process_worker.utils.decorator import timeout
-from mail_process_worker.logic.client.mqtt_client import MQTTClient
-from mail_process_worker.logic.client.kafka_client import KafkaConsumerClient
+from mail_process_worker.logic.client.kafka_client import KafkaConsumerClient, KafkaProducerClient
 from mail_process_worker.logic.client.redis_client import rdb
 from mail_process_worker.setting import WorkerConfig
 
@@ -15,7 +13,7 @@ class HandleEvent:
         self.user_events = {}
         self.new_event = {}
         self.messages = []
-        self.mqtt = MQTTClient()
+        self.producer = KafkaProducerClient()
         self.consumer = KafkaConsumerClient()
         self.consumer.create_consumer()
 
@@ -25,8 +23,8 @@ class HandleEvent:
 
     def set_priority(self, data: dict):
         if len(self.messages) == WorkerConfig.NUMBER_OF_MESSAGE:
-            self.mqtt.ordered_message(self.user_events)
-            self.mqtt.publish_message(self.consumer.consumer)
+            self.producer.ordered_message(self.user_events)
+            self.producer.send_message(self.consumer.consumer)
             self.user_events.clear()
             self.new_event.clear()
             self.messages.clear()
@@ -52,7 +50,6 @@ class HandleEvent:
         if not exist_user:
             self.user_events.update({user: []})
         self.user_events[user].append((event_priority[event_name], data))
-        logger.info(f"set priority for {data['event']} | DONE")
 
     @timeout(10)
     def custom_event(self, event_name: str, data: dict):
@@ -93,7 +90,7 @@ class HandleEvent:
     def handle_event(self, event):
         data = event.value
         logger.info(data)
-        #self.delay_event(data.get('user'), data.get("msgid"))
+        self.delay_event(data.get('user'), data.get("msgid"))
         if data["event"] in [
             "MessageRead",
             "MailboxSubscribe",
@@ -103,7 +100,6 @@ class HandleEvent:
 
         data.update(
             {
-                "id": str(uuid.uuid4()),
                 "topic": event.topic,
                 "partition": event.partition,
                 "offset": event.offset,
@@ -137,8 +133,8 @@ class HandleEvent:
         start = time.time()
         while True:
             if time.time() - start > WorkerConfig.WINDOW_DURATION:
-                self.mqtt.ordered_message(self.user_events)
-                self.mqtt.publish_message(self.consumer.consumer)
+                self.producer.ordered_message(self.user_events)
+                self.producer.send_message(self.consumer.consumer)
                 self.user_events.clear()
                 self.new_event.clear()
                 self.messages.clear()

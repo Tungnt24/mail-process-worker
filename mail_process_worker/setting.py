@@ -5,7 +5,7 @@ env = Env()
 env.read_env()
 
 
-class KafkaConsumerConfig:
+class KafkaClientConfig:
     KAFKA_BROKER = env.list("KAFKA_BROKER")
     KAFKA_CONSUMER_TOPIC = env.list("KAFKA_CONSUMER_TOPIC")
     KAFKA_CONSUMER_GROUP = env.str("KAFKA_CONSUMER_GROUP")
@@ -13,6 +13,11 @@ class KafkaConsumerConfig:
     KAFKA_AUTO_OFFSET_RESET = env.str("KAFKA_AUTO_OFFSET_RESET")
     KAFKA_MAX_POLL_RECORDS = env.int("KAFKA_MAX_POLL_RECORDS")
     KAFKA_POLL_TIMEOUT = env.int("KAFKA_POLL_TIMEOUT")
+
+    KAFKA_PRODUCER_NORMAL_TOPIC = env.str("KAFKA_PRODUCER_NORMAL_TOPIC")
+    KAFKA_PRODUCER_AGGREGATED_TOPIC = env.str("KAFKA_PRODUCER_AGGREGATED_TOPIC")
+    KAFKA_SLICE_SIZE = env.int("KAFKA_SLICE_SIZE")
+    KAFKA_IGNORE_DOMAIN = env.list("KAFKA_IGNORE_DOMAIN")
 
 
 class MQTTConfig:
